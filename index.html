@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <script src="./libs/d3.js"></script>
+        <script src="libs/d3jstopojson.v1.js"></script>
+        <title>MA Map</title>
+        <style>
+            #tooltip {
+                position: absolute;
+                opacity: 0;
+                top: 0;
+                left: 0;
+                width: auto;
+                padding: 10px;
+                background: white;
+                font-family: sans-serif;
+                font-size: medium;
+                border-radius: 2px;
+                line-height: 1;
+            }
+
+            #tooltip-text {
+                position: absolute;
+                opacity: 0;
+                top: 0;
+                left: 0;
+                width: auto;
+                padding: 10px;
+                background: white;
+                font-family: sans-serif;
+                font-size: medium;
+                border-radius: 2px;
+                line-height: 1;
+            }
+
+            #tooltip-chart {
+                position: absolute;
+                opacity: 0;
+                top: 0;
+                left: 0;
+                width: auto;
+                padding: 10px;
+                background: white;
+                font-family: sans-serif;
+                font-size: medium;
+                border-radius: 2px;
+                line-height: 1;
+            }
+
+            path {
+                stroke-width: 0.5px;
+                stroke: black;
+            }
+
+            path:hover {
+                opacity: 0.6;
+                stroke: black;
+                stroke-width: 4px;
+            }
+
+            .container {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+            }
+        </style>
+    </head>
+
+    <body>
+        <div id="tooltip"></div>
+        <div id="tooltip-chart" width="200" height="100"></div>
+        <div id="tooltip-text"></div>
+        <div class="container">
+            <h1>Geospatial Visualization: Massachusetts</h1>
+            <h3>ramanapayili7</h3>
+            <div class="fig1"></div>
+            <div class="fig2"></div>
+            <div class="fig3"></div>
+        </div>
+
+        <script>
+            /*-------------------------------------------------------*/
+            /*------------------- Window setting --------------------*/
+            /*-------------------------------------------------------*/
+            // dimension of the page
+            const window_dims = {
+                width: window.innerWidth,
+                height: window.innerHeight,
+            };
+
+            const svgWidth = window_dims.width / 2;
+            const svgHeight = window_dims.width / 3;
+            // Append an SVG element to body, then append a path for the boundaries
+
+            /*-------------------------------------------------------*/
+            /*-----------------parallel load data--------------------*/
+            /*-------------------------------------------------------*/
+
+            // a topojson file containing population of each town in different years
+            const MA_counties = "./data/towns.topojson";
+            // gini index per county
+            const gini_index = "./data/gini_index.csv";
+
+            // FIPS code to Color mapping via Hue Channel
+            const fipsData = [
+                { county: "Barnstable County", fips_code: 25001 },
+                { county: "Berkshire County", fips_code: 25003 },
+                { county: "Bristol County", fips_code: 25005 },
+                { county: "Dukes County", fips_code: 25007 },
+                { county: "Essex County", fips_code: 25009 },
+                { county: "Franklin County", fips_code: 25011 },
+                { county: "Hampden County", fips_code: 25013 },
+                { county: "Hampshire County", fips_code: 25015 },
+                { county: "Middlesex County", fips_code: 25017 },
+                { county: "Nantucket County", fips_code: 25019 },
+                { county: "Norfolk County", fips_code: 25021 },
+                { county: "Plymouth County", fips_code: 25023 },
+                { county: "Suffolk County", fips_code: 25025 },
+                { county: "Worcester County", fips_code: 25027 },
+            ];
+
+            // open both files
+            Promise.all([d3.json(MA_counties), d3.csv(gini_index)]).then(
+                (data) => {
+                    // topology data
+                    const topology_data = data[0];
+                    // gini index data
+                    const csv_data = data[1];
+
+                    const gini_data = data[1].map((row) => ({
+                        id: row["id"], // Match 'id' column
+                        fipsCode: row["id"].slice(row["id"].length - 5),
+                        county: row["Geographic Area Name"], // Use 'Geographic Area Name' column
+                        giniIndex: parseFloat(row["Estimate!!Gini Index"]), // Parse Gini Index as float
+                        year: parseInt(row["year"], 10), // Parse year as integer
+                    }));
+
+                    // Filter Gini Index data for 2019 only
+                    const gini_data_2019 = gini_data.filter(
+                        (d) => d.year === 2019,
+                    );
+
+                    // Group data by county
+                    const groupedGiniData = d3.group(
+                        gini_data,
+                        (d) => d.county,
+                    );
+
+                    // Transform into a structured list
+                    const giniIndexByCountry = Array.from(
+                        groupedGiniData,
+                        ([county, records]) => ({
+                            country: county,
+                            fips_code: parseInt(records[0]?.fipsCode),
+                            timeline: records
+                                .map((record) => ({
+                                    year: record.year,
+                                    giniIndex: record.giniIndex,
+                                }))
+                                .sort((a, b) => a.year - b.year), // Ensure records are sorted by year
+                        }),
+                    );
+
+                    // Convert the Gini index CSV data into an object using county name as key
+                    const giniData = {};
+                    csv_data.forEach((d) => {
+                        // Extract county name (without ' Massachusetts') for matching
+                        const countyName = d["Geographic Area Name"]
+                            .replace(", Massachusetts", "")
+                            .replace(" County", "")
+                            .trim();
+                        giniData[countyName.toUpperCase()] = parseFloat(
+                            d["Estimate!!Gini Index"],
+                        );
+                    });
+
+                    const giniMap = new Map();
+                    gini_data.forEach((d) => {
+                        const fipsCode = +d["id"].slice(-5); // Extract the FIPS code from the id
+                        giniMap.set(fipsCode, {
+                            giniIndex: +d["Estimate!!Gini Index"],
+                            year: d["year"],
+                            population:
+                                d["Estimate!!Population"] ||
+                                "Data not available",
+                        });
+                    });
+
+                    // const generateMap1 = (
+                    //     topo_data,
+                    //     containerName,
+                    //     width,
+                    //     height,
+                    //     margin = 30,
+                    // ) => {
+                    //     const svg = d3
+                    //         .select(containerName)
+                    //         .append("svg")
+                    //         .attr("width", width)
+                    //         .attr("height", height);
+
+                    //     /*-------------------------------------------------------*/
+                    //     /*-----------------Topojson data handling----------------*/
+                    //     /*-------------------------------------------------------*/
+                    //     // if topojson file is imported we need to
+                    //     // convert topology data to geojson
+                    //     const geojson = topojson.feature(
+                    //         topo_data,
+                    //         topo_data.objects.ma,
+                    //     );
+
+                    //     /*-------------------------------------------------------*/
+                    //     /*----------------------Projections----------------------*/
+                    //     /*-------------------------------------------------------*/
+                    //     const projections = [
+                    //         d3.geoAzimuthalEqualArea(), //Azimuthal projections project the sphere directly onto a plane.
+                    //         d3.geoAlbersUsa(), // USA conic projection
+                    //         d3.geoAlbers(), // equal-area conic projection
+                    //         d3.geoMercator(), // cylindrical projection
+                    //         d3.geoNaturalEarth1(), // pseudocylindrical projection designed by Tom Patterson
+                    //         d3.geoEqualEarth(), // Equal Earth projection, by Bojan Šavrič et al., 2018.
+                    //         d3.geoConicEqualArea(), //equal-area conic projection
+                    //         d3.geoEquirectangular(), //Cylindrical Projections
+                    //         d3.geoOrthographic(),
+                    //     ];
+                    //     /*-------------------------------------------------------*/
+                    //     /*----------------geoPath generator----------------------*/
+                    //     /*-------------------------------------------------------*/
+
+                    //     const geoPath_generator = d3
+                    //         .geoPath()
+                    //         .projection(
+                    //             projections[3].fitSize(
+                    //                 [width - margin, height - margin],
+                    //                 geojson,
+                    //             ),
+                    //         );
+                    //     /*-------------------------------------------------------*/
+                    //     /*----------------------Color Scaling--------------------*/
+                    //     /*-------------------------------------------------------*/
+                    //     //https://observablehq.com/@d3/working-with-color
+                    //     //https://colorbrewer2.org/#type=diverging&scheme=RdYlBu&n=6
+                    //     const colorInterpolator = d3.interpolateRgbBasis(
+                    //         [
+                    //             "#d73027",
+                    //             "#fc8d59",
+                    //             "#fee090",
+                    //             "#e0f3f8",
+                    //             "#91bfdb",
+                    //             "#4575b4",
+                    //         ].reverse(),
+                    //     );
+                    //     // if the data is scaled using log scale
+                    //     const logScale = d3.scaleLog().domain(
+                    //         d3.extent(geojson.features, (d) => {
+                    //             return d["properties"]["POP2010"];
+                    //         }),
+                    //     );
+                    //     // if the data is scaled using linear scale
+                    //     const linearScale = d3.scaleLinear().domain(
+                    //         d3.extent(geojson.features, (d) => {
+                    //             return d["properties"]["POP2010"];
+                    //         }),
+                    //     );
+                    //     /*-------------------------------------------------------*/
+                    //     /*---------------------- Tooltip ------------------------*/
+                    //     /*-------------------------------------------------------*/
+                    //     const tooltip = d3.select("#tooltip");
+                    //     /*--------------------------------------------------------*/
+                    //     /*----------------- channelling marks --------------------*/
+                    //     /*--------------------------------------------------------*/
+
+                    //     svg.selectAll("path")
+                    //         .data(geojson.features)
+                    //         .enter()
+                    //         .append("path")
+                    //         .attr("d", (d) => geoPath_generator(d))
+                    //         //.attr("fill", d => colorInterpolator(logScale(d['properties']['POP2010'])))
+                    //         .attr("fill", (d) =>
+                    //             colorInterpolator(
+                    //                 linearScale(d["properties"]["POP2010"]),
+                    //             ),
+                    //         )
+                    //         .on("mouseenter", (m, d) => {
+                    //             tooltip
+                    //                 .transition()
+                    //                 .duration(200)
+                    //                 .style("opacity", 0.9);
+                    //             tooltip
+                    //                 .html(d["properties"]["TOWN"])
+                    //                 .style("left", m.clientX + "px")
+                    //                 .style("top", m.clientY + "px");
+                    //         })
+                    //         .on("mousemove", (m, d) => {
+                    //             tooltip.style("opacity", 0.9);
+                    //         })
+                    //         .on("mouseout", (m, d) => {
+                    //             tooltip
+                    //                 .transition()
+                    //                 .duration(400)
+                    //                 .style("opacity", 0);
+                    //         });
+                    // };
+
+                    const generateMapA = (
+                        topo_data,
+                        containerName,
+                        width,
+                        height,
+                        margin = 30,
+                    ) => {
+                        const svg = d3
+                            .select(containerName)
+                            .append("svg")
+                            .attr("width", width)
+                            .attr("height", height);
+
+                        // Convert TopoJSON to GeoJSON
+                        const geojson = topojson.feature(
+                            topo_data,
+                            topo_data.objects.ma,
+                        );
+
+                        // Define a color scale for the population data (1980)
+                        const popExtent1980 = d3.extent(
+                            geojson.features,
+                            (d) => d.properties.POP1980,
+                        );
+                        const colorScale = d3
+                            .scaleSequential()
+                            .domain(popExtent1980)
+                            .interpolator(d3.interpolateBlues); // Sequential blues color scheme
+
+                        // Tooltip setup
+                        const tooltip = d3.select("#tooltip");
+
+                        // Draw towns with color coding for population
+                        svg.selectAll("path")
+                            .data(geojson.features)
+                            .enter()
+                            .append("path")
+                            .attr(
+                                "d",
+                                d3
+                                    .geoPath()
+                                    .projection(
+                                        d3
+                                            .geoMercator()
+                                            .fitSize(
+                                                [
+                                                    width - margin,
+                                                    height - margin,
+                                                ],
+                                                geojson,
+                                            ),
+                                    ),
+                            )
+                            .attr("fill", (d) => {
+                                const pop1980 = d.properties.POP1980;
+                                return pop1980 ? colorScale(pop1980) : "#ccc"; // Fallback for missing data
+                            })
+                            .attr("stroke", "black")
+                            .attr("stroke-width", 0.5)
+                            .on("mouseenter", (event, d) => {
+                                const townName = d.properties.TOWN;
+                                const pop1980 = d.properties.POP1980;
+                                if (pop1980) {
+                                    tooltip
+                                        .transition()
+                                        .duration(200)
+                                        .style("opacity", 0.9);
+                                    tooltip
+                                        .html(
+                                            `<strong>${townName}</strong><br/>Population (1980): ${pop1980.toLocaleString()}`,
+                                        )
+                                        .style("left", event.clientX + "px")
+                                        .style("top", event.clientY + "px");
+                                }
+                            })
+                            .on("mousemove", (event) => {
+                                tooltip
+                                    .style("left", event.clientX + "px")
+                                    .style("top", event.clientY + "px");
+                            })
+                            .on("mouseleave", () => {
+                                tooltip
+                                    .transition()
+                                    .duration(400)
+                                    .style("opacity", 0);
+                            });
+                    };
+
+                    const generateMapB = (
+                        topo_data,
+                        containerName,
+                        width,
+                        height,
+                        margin = 30,
+                    ) => {
+                        const svg = d3
+                            .select(containerName)
+                            .append("svg")
+                            .attr("width", width)
+                            .attr("height", height);
+
+                        // Convert TopoJSON to GeoJSON
+                        const geojson = topojson.feature(
+                            topo_data,
+                            topo_data.objects.ma,
+                        );
+
+                        // Calculate population change (2010 - 1980)
+                        geojson.features.forEach((d) => {
+                            const pop1980 = d.properties.POP1980 || 0;
+                            const pop2010 = d.properties.POP2010 || 0;
+                            d.properties.PopChange = pop2010 - pop1980;
+                        });
+
+                        // Define a diverging color scale
+                        const popChangeExtent = d3.extent(
+                            geojson.features,
+                            (d) => d.properties.PopChange,
+                        );
+                        const colorScale = d3
+                            .scaleDiverging()
+                            .domain([popChangeExtent[0], 0, popChangeExtent[1]])
+                            .interpolator(d3.interpolateRdBu);
+
+                        // Tooltip setup
+                        const tooltip = d3.select("#tooltip");
+
+                        // Draw towns with color coding for population change
+                        svg.selectAll("path")
+                            .data(geojson.features)
+                            .enter()
+                            .append("path")
+                            .attr(
+                                "d",
+                                d3
+                                    .geoPath()
+                                    .projection(
+                                        d3
+                                            .geoMercator()
+                                            .fitSize(
+                                                [
+                                                    width - margin,
+                                                    height - margin,
+                                                ],
+                                                geojson,
+                                            ),
+                                    ),
+                            )
+                            .attr("fill", (d) => {
+                                const popChange = d.properties.PopChange;
+                                return popChange !== null
+                                    ? colorScale(popChange)
+                                    : "#ccc"; // Fallback for missing data
+                            })
+                            .attr("stroke", "black")
+                            .attr("stroke-width", 0.5)
+                            .attr("data-town", (d) => d.properties.TOWN) // Add data attribute for interaction
+                            .on("mouseenter", (event, d) => {
+                                const townName = d.properties.TOWN;
+                                const pop1980 = d.properties.POP1980 || 0;
+                                const pop2010 = d.properties.POP2010 || 0;
+                                const popChange = d.properties.PopChange || 0;
+
+                                // Highlight corresponding town in MAP A
+                                d3.selectAll(
+                                    `[data-town="${townName}"]`,
+                                ).classed("highlight", true);
+
+                                // Tooltip
+                                tooltip
+                                    .transition()
+                                    .duration(200)
+                                    .style("opacity", 0.9);
+                                tooltip
+                                    .html(
+                                        `<strong>${townName}</strong><br/>Population (1980): ${pop1980.toLocaleString()}<br/>Population (2010): ${pop2010.toLocaleString()}<br/>Change: ${popChange.toLocaleString()}`,
+                                    )
+                                    .style("left", event.clientX + "px")
+                                    .style("top", event.clientY + "px");
+                            })
+                            .on("mousemove", (event) => {
+                                tooltip
+                                    .style("left", event.clientX + "px")
+                                    .style("top", event.clientY + "px");
+                            })
+                            .on("mouseleave", (event, d) => {
+                                // Remove highlight
+                                d3.selectAll(
+                                    `[data-town="${d.properties.TOWN}"]`,
+                                ).classed("highlight", false);
+                                tooltip
+                                    .transition()
+                                    .duration(400)
+                                    .style("opacity", 0);
+                            });
+                    };
+
+                    const generateMapC = (
+                        topo_data,
+                        gini_data,
+                        containerName,
+                        width,
+                        height,
+                        margin = 30,
+                    ) => {
+                        const svg = d3
+                            .select(containerName)
+                            .append("svg")
+                            .attr("width", width)
+                            .attr("height", height);
+
+                        /*-------------------------------------------------------*/
+                        /*----------------- Topojson data handling --------------*/
+                        /*-------------------------------------------------------*/
+                        const geojson = topojson.feature(
+                            topo_data,
+                            topo_data.objects.ma,
+                        );
+
+                        /*-------------------------------------------------------*/
+                        /*---------------------- Projections --------------------*/
+                        /*-------------------------------------------------------*/
+                        const projections = [
+                            d3.geoAzimuthalEqualArea(),
+                            d3.geoAlbersUsa(),
+                            d3.geoAlbers(),
+                            d3.geoMercator(),
+                            d3.geoNaturalEarth1(),
+                            d3.geoEqualEarth(),
+                            d3.geoConicEqualArea(),
+                            d3.geoEquirectangular(),
+                            d3.geoOrthographic(),
+                        ];
+
+                        const geoPath_generator = d3
+                            .geoPath()
+                            .projection(
+                                projections[3].fitSize(
+                                    [width - margin, height - margin],
+                                    geojson,
+                                ),
+                            );
+
+                        /*-------------------------------------------------------*/
+                        /*---------------------- Tooltip ------------------------*/
+                        /*-------------------------------------------------------*/
+                        const tooltipText = d3.select("#tooltip-text");
+                        const tooltipChart = d3.select("#tooltip-chart");
+
+                        const gini_data_2019 = gini_data.filter(
+                            (d) => d.year === 2019,
+                        );
+
+                        /*-------------------------------------------------------*/
+                        /*---------------------- Color Scale (Hue Channel) ------*/
+                        /*-------------------------------------------------------*/
+
+                        // Create a color scale using Hue Channel (HSL)
+                        const hueScale = d3
+                            .scaleSequential(d3.interpolateHue(0, 250))
+                            .domain([
+                                0,
+                                d3.max(gini_data?.map((e) => e.giniIndex)),
+                            ]) // Map the FIPS code index to the hue range
+                            .clamp(true); // Make sure the hue wraps correctly
+
+                        // Assuming giniTimelineData is already processed
+                        const lineGenerator = d3
+                            .line()
+                            .x((d) => xScale(d.year)) // X-position (Year)
+                            .y((d) => yScale(d.giniIndex)); // Y-position (Gini Index);
+
+                        // Define scales for the line chart
+                        const xScale = d3
+                            .scaleLinear()
+                            .domain([1980, 2010]) // Adjust the domain based on your data range
+                            .range([0, 150]); // Adjust the range based on the desired chart width
+
+                        const yScale = d3
+                            .scaleLinear()
+                            .domain([0.4, 0.6]) // Adjust the domain based on your Gini Index values
+                            .range([100, 0]); // Adjust the range based on the desired chart height
+
+                        /*--------------------------------------------------------*/
+                        /*----------------- Channeling marks --------------------*/
+                        /*--------------------------------------------------------*/
+
+                        svg.selectAll("path")
+                            .data(geojson.features)
+                            .enter()
+                            .append("path")
+                            .attr("d", (d) => geoPath_generator(d))
+                            .attr("fill", (d) => {
+                                const isTheir = fipsData.find(
+                                    (e) =>
+                                        e?.fips_code ===
+                                        d["properties"]["FIPS_STCO"],
+                                );
+                                const area = gini_data.find((e) =>
+                                    e.id.includes(d["properties"]["FIPS_STCO"]),
+                                );
+                                return `hsl(${hueScale(
+                                    area?.giniIndex,
+                                )} 100% 50%)`;
+                            }) // Apply the hue color based on the index
+                            .on("mouseenter", (event, d) => {
+                                const area = gini_data.find((e) =>
+                                    e.id.includes(d["properties"]["FIPS_STCO"]),
+                                );
+
+                                const code = d["properties"]["FIPS_STCO"];
+
+                                // Filter Gini index data for this town
+                                // const townGiniData = giniIndexByCountry.filter(
+                                //     (row) => row.fips_code === code,
+                                // )[0];
+
+                                // if (
+                                //     townGiniData &&
+                                //     townGiniData?.timeline.length > 0
+                                // ) {
+                                //     xScale.domain(
+                                //         d3.extent(
+                                //             townGiniData?.timeline,
+                                //             (d) => +d.year,
+                                //         ),
+                                //     );
+                                //     yScale.domain([
+                                //         d3.min(
+                                //             townGiniData?.timeline,
+                                //             (d) => +d.giniIndex,
+                                //         ),
+                                //         d3.max(
+                                //             townGiniData?.timeline,
+                                //             (d) => +d.giniIndex,
+                                //         ),
+                                //     ]);
+
+                                //     tooltipChart.selectAll("*").remove();
+
+                                //     const svgTooltip = tooltipChart
+                                //         .append("svg")
+                                //         .attr(
+                                //             "width",
+                                //             500 +
+                                //                 tooltipMargin.left +
+                                //                 tooltipMargin.right,
+                                //         )
+                                //         .attr(
+                                //             "height",
+                                //             500 +
+                                //                 tooltipMargin.top +
+                                //                 tooltipMargin.bottom,
+                                //         )
+                                //         .append("g")
+                                //         .attr(
+                                //             "transform",
+                                //             `translate(${tooltipMargin.left},${tooltipMargin.top})`,
+                                //         );
+
+                                //     svgTooltip
+                                //         .append("path")
+                                //         .datum(townGiniData?.timeline)
+                                //         .attr("fill", "none")
+                                //         .attr("stroke", "steelblue")
+                                //         .attr("stroke-width", 1.5)
+                                //         .attr("d", lineGenerator);
+
+                                //     svgTooltip
+                                //         .append("g")
+                                //         .attr(
+                                //             "transform",
+                                //             `translate(0,${500})`,
+                                //         )
+                                //         .call(
+                                //             d3
+                                //                 .axisBottom(xScale)
+                                //                 .ticks(4)
+                                //                 .tickFormat(d3.format("d")),
+                                //         );
+
+                                //     svgTooltip
+                                //         .append("g")
+                                //         .call(d3.axisLeft(yScale).ticks(4));
+                                // }
+
+                                tooltipText
+                                    .transition()
+                                    .duration(200)
+                                    .style("opacity", 0.9);
+                                tooltipText
+                                    .html(
+                                        `
+                                            <strong>County:</strong> ${
+                                                d["properties"]["TOWN"]
+                                            }<br>
+                                            <strong>Gini Index :</strong> ${
+                                                area?.giniIndex
+                                            }<br>
+                                            <strong>Population in  1980 :</strong> ${d[
+                                                "properties"
+                                            ]["POP1980"].toLocaleString()}<br>
+                                            <strong>Population in  1990 :</strong> ${d[
+                                                "properties"
+                                            ]["POP1990"].toLocaleString()}<br>
+                                            <strong>Population in  2000 :</strong> ${d[
+                                                "properties"
+                                            ]["POP2000"].toLocaleString()}<br>
+                                            <strong>Population in  2010 :</strong> ${d[
+                                                "properties"
+                                            ]["POP2010"].toLocaleString()}<br>
+                                            <strong>Population Change from 1980 to 2010 :</strong>${
+                                                d["properties"]["POP1980"] -
+                                                d["properties"]["POP2010"]
+                                            }<br>
+                                        `,
+                                    )
+                                    .style("left", event.clientX + "px")
+                                    .style("top", event.clientY + "px");
+                            })
+                            .on("mousemove", (event, d) => {
+                                tooltipText
+                                    .style("left", event.clientX + "px")
+                                    .style("top", event.clientY + "px");
+                            })
+                            .on("mouseout", () => {
+                                tooltipText
+                                    .transition()
+                                    .duration(400)
+                                    .style("opacity", 0);
+                            });
+                    };
+
+                    generateMapA(topology_data, ".fig1", svgWidth, svgHeight);
+
+                    generateMapB(topology_data, ".fig2", svgWidth, svgHeight);
+
+                    generateMapC(
+                        topology_data,
+                        gini_data,
+                        ".fig3",
+                        svgWidth,
+                        svgHeight,
+                    );
+
+                    // generateMap1(topology_data, ".fig1", svgWidth, svgHeight);
+                },
+            );
+
+            // const highlightTown = (townName) => {
+            //     d3.selectAll(`[data-town="${townName}"]`).classed(
+            //         "highlight",
+            //         true,
+            //     );
+            // };
+
+            // const unhighlightTown = (townName) => {
+            //     d3.selectAll(`[data-town="${townName}"]`).classed(
+            //         "highlight",
+            //         false,
+            //     );
+            // };
+
+            // Add highlight styles
+            //     d3.select("style").html(
+            //         `
+            // .highlight {
+            //     stroke: orange;
+            //     stroke-width: 3px;
+            //     opacity: 1 !important;
+            // }
+            // `,
+            //     );
+
+            // app.get("/api/books/:isbn", (req, resp) => {
+            //     // use mongoose to retrieve all books from Mongo
+            //     Book.find({ isbn10: req.params.isbn }, function (err, data) {
+            //         if (err) {
+            //             resp.json({ message: "Book not found" });
+            //         } else {
+            //             resp.json(data);
+            //         }
+            //     });
+            // });
+        </script>
+    </body>
+</html>
